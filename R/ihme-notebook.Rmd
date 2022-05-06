@@ -2,10 +2,12 @@
 title: "IHME Technical Assessment"
 author: "Hans Elliott"
 date: "5/5/2022"
-output: pdf_document
+output: 
+  pdf_document
 ---
 
 ```{r setup, include=FALSE}
+##Note: replace 'pdf_document' with the (uncommented) lines below for HTML file
 ##  html_document:
 ##    theme: readable
 
