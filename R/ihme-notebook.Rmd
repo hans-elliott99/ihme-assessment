@@ -1,37 +1,38 @@
 ---
-title: "IHME Assessment"
+title: "IHME Technical Assessment"
 author: "Hans Elliott"
 date: "5/5/2022"
-output: html_document
+output: 
+  html_document:
+    theme: readable
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
 ```
 
-# Data & Libraries
 
+```{r warning=FALSE, message=FALSE, results='hide'}
+## DATA & LIBRARIES ------------------------
 
-```{r warning=FALSE, message=FALSE}
 # Load libraries
 ## Install the 'pacman' package-management package if necessary 
 if (!require("pacman")) install.packages("pacman")
 ## Install other packages using pacman::p_load()
-pacman::p_load(here, janitor, skimr, ##for loading/cleaning data
-               ggplot2, RColorBrewer, ggrepel, scales,
-               fixest, ##flexible regression package
-               dplyr, tidyr
+pacman::p_load(here, janitor, skimr,        ##for loading/cleaning data
+               ggplot2, RColorBrewer, ggrepel, scales,  ##for plotting
+               forecast,    ##for some forecasting
+               Hmisc,       ##for creating a lag variable
+               dplyr, tidyr ##for general data manipulation
                )
 
 # Load Data
 covid = here("data", "covid_data_cases_deaths_hosp.csv") %>% read.csv()
 dim(covid) ##view data dimensions
-```
 
-# Cleaning & Setup
-
-
-```{r}
+## CLEANING ---------------------------------
 ## Convert variable names to common format ("snake_case")
 covid = janitor::clean_names(covid)
 names(covid)
@@ -43,21 +44,16 @@ skimr::skim(covid) %>% select(skim_variable, n_missing, complete_rate)
 ```
 
 
-# Questions 
 
 ## Q1: Cases, Hospitalizations, & Deaths
-COVID-19 cases, hospitalizations, and deaths share an almost linear relationship. Plot 1 shows the relationship between these indicators grouped by state and totaled over time (2020). The states with the lowest reported cases also had the least deaths and the least hospitalizations. As we move along the x-axis, higher levels of reported cases map to states with higher deaths and hospitalizations.  
-This is logical since states which suffered more severe outbreaks had more COVID cases, yielding more hospitalizations and more deaths.   
+COVID-19 cases, hospitalizations, and deaths share an almost linear relationship. Plot 1 shows the relationship between these indicators grouped by state and totaled over time (2020). The states with the lowest reported cases also had the least deaths and the least hospitalizations. As we move along the x-axis, higher levels of reported cases map to states with higher deaths and hospitalizations. This is logical since states which suffered more severe outbreaks had more COVID cases, yielding more hospitalizations and more deaths.     
 Plot 2 shows the accumulation of cases, deaths, and hospitalizations over time. Although there are significantly more reported cases than deaths or hospitalizations, the three indicators follow very similar time trends, providing further evidence of a linear relationship with each other. However, Plot 2 also reveals that these variables are not linear in time. The first several months of 2020 saw sharp increases in all three variables which began to level out towards the second half of the year.  
 
 
 
 
-### Plot 1: Relationship by Location
+#### Plot 1: Relationship by Location
 ```{r, dpi = 200, warning=FALSE,message=FALSE}
-# library(ggplot2)
-# library(RColorBrewer)
-# library(ggrepel)
 ## Create color palette for plot
 my_palette = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))
 
@@ -120,12 +116,9 @@ covid_by_place %>%
 ```
 
 
-### Plot 2: Relationship Over Time
+#### Plot 2: Relationship Over Time
 
-```{r, dpi=200}
-# library(ggplot2)
-# library(RColorBrewer)
-# library(ggrepel)
+```{r, dpi=200, results='asis'}
 
 ##Total COVID indicators for each date
 covid_by_date = covid %>%
@@ -161,8 +154,8 @@ covid_by_date %>%
     scale_x_date(date_breaks = "1 month",
                  labels = scales::date_format("%b")) +
     ##add plot labels
-    labs(title = "U.S. 2020 Covid-19 Outbreak Indicators",
-         x = "2020", y = "Cumulative Count (Thousands)",
+    labs(title = "U.S. 2020 Covid-19 Outbreak: Changes over Time",
+         x = "2020", y = "Log of Cumulative Count (Thousands)",
          caption = 
            "Hospitalization data available for a limited number of states.") +
     ##format theme
@@ -184,50 +177,98 @@ covid_by_date %>%
 
 ## Q2: Modeling Daily Deaths
 
+I fit a linear regression to predict daily U.S. COVID-19 deaths from cases and hospitalizations. Before fitting the model, I aggregated the cases, hospitalizations, and deaths by date, providing a total across the U.S. for each day. I then split this dataset into a training and testing (validation) set in order to evaluate different model specifications. I settled on a model which predicts daily deaths given cases, hospitalizations, a 14-day lag variable of deaths, and a death to case ratio which is also lagged by 14 days. This was one of the less flexible specifications that I tried, which will ideally limit overfitting. Ultimately it was the best model in terms of reducing training and validation RMSE and still providing reasonable projections. As seen in the plot below, it is effective at capturing the general trend in COVID-19 deaths over time.  
+```{r, echo=FALSE, results='hide'}
+# DATA PREPROCESSING ------------------------------------------------
 
-```{r}
-## Some data preprocessing
-model_df = covid %>%
+##Aggregate variables by date across the US
+model_df = covid %>% 
   group_by(date) %>%
   summarise(cases = sum(confirmed, na.rm = T),
             deaths = sum(deaths, na.rm = T),
             hosp = sum(hospitalizations, na.rm = T),
-            death_case_ratio = deaths/cases) %>%
-  ##Convert date from EXCEL's numeric format to date format
-  mutate(date = as.Date(date, origin = "1899-12-30")) %>%
-  ##center/rescale covariates to avoid overflow errors
+            hosp_case_ratio = hosp/cases) %>%
+ ##Convert date from EXCEL's numeric format to date format 
+  mutate(date = as.Date(date, origin = "1899-12-30"),
+        #& add 14-day lag var for deaths and cases
+        #need to correct for the NAs introduced at beginning of series
+         lagged_deaths = Hmisc::Lag(deaths, +14),
+          lagged_deaths = ifelse(is.na(lagged_deaths), 0, lagged_deaths),
+         lagged_cases = Hmisc::Lag(cases, +14),
+          lagged_cases = ifelse(is.na(lagged_cases), 0, lagged_cases),
+         lag_case_death_rat = lagged_deaths/lagged_cases,
+          lag_case_death_rat = ifelse(is.na(lag_case_death_rat), 0,
+                                      lag_case_death_rat)) %>%
+ ##Center/rescale covariates to avoid overflow errors
+ ##(was necessary for inclusion of polynomials or interaction terms)
   mutate(scaled_cases = scale(cases),
          scaled_hosp = scale(hosp))
 
 
-mod1 = lm(deaths ~ scaled_cases + scaled_hosp + death_case_ratio +
-                     #sqrt(cases) + sqrt(hosp) + sqrt(cases)*sqrt(hosp) +
-                     I(scaled_cases^2) + I(scaled_hosp^2) +
-                      scaled_cases*scaled_hosp,
-                     data = model_df)
+##Split data into training and testing (before and after June 1)
+train_df = model_df %>% filter(date < "2020-06-01") 
+test_df = model_df %>% filter(date >= "2020-06-01")
 
-summary(mod1)
+## TRAINING FIT ---------------------------------------------
 
-print(paste("Model RMSE:",
-            sqrt( mean((model_df$deaths - predict(mod1))^2)  ) %>% round(5)
+mod1 = lm(deaths ~ lagged_deaths + cases + lag_case_death_rat,
+                     data = train_df)
+
+summary(mod1) ##view model summary
+
+## View model RMSE
+print(paste("Model Training RMSE:",
+            sqrt( mean((train_df$deaths - predict(mod1))^2)  ) %>% round(4)
 ))
 
+#Model Testing ------------------------------------------------
+
+## VIEW TRAINING PREDICTIONS
+##predicted deaths
+training_pred = data.frame(date = train_df$date,
+                        death_hat = predict(mod1))
+
+ptrain = ggplot() +
+  geom_line(data = train_df, aes(x = date, y = deaths), 
+            size = 1, alpha = 0.5) +
+  geom_line(data = training_pred,
+            aes(x = date, y = death_hat),
+            size = 0.5, alpha = 0.9, color = 'red')
+
+## VIEW TESTING PREDICTIONS
+test_pred = data.frame(death_hat = predict(mod1, test_df),
+                        date = test_df$date)
+
+print(paste("Model Testing RMSE:",
+            sqrt( mean((test_df$deaths - test_pred$death_hat)^2) ) %>%
+              round(5)
+))
+
+ptest = ggplot() +
+  geom_line(data = test_df, aes(x = date, y = deaths), 
+            size = 1, alpha = 0.5) +
+  geom_line(data = test_pred,
+            aes(x = date, y = death_hat),
+            size = 0.5, alpha = 0.9, color = 'red')
 ```
 
 
-```{r}
-##predicted deaths
-pred_deaths = data.frame(date = model_df$date,
-                        death_hat = predict(mod1))
+```{r, echo=FALSE, dpi=200}
+##FINAL MODEL -------------------------------------------
+## Fit final model on full dataset
+mod_final = lm(deaths ~ cases + hosp + lagged_deaths + lag_case_death_rat,
+               data = model_df)
 
+## Extract predicted deaths
+mod_pred = data.frame(date = model_df$date,
+                      death_hat = predict(mod_final))
 
-##plot
+## Plot results
 ggplot() +
-  geom_line(data = covid_by_date, aes(x = date, y = deaths/1e3), 
+  geom_line(data = model_df, aes(x = date, y = deaths/1e3), 
             size = 1, alpha = 0.5) +
-  geom_line(data = pred_deaths, aes(x = date, y = death_hat/1e3),
+  geom_line(data = mod_pred, aes(x = date, y = death_hat/1e3),
             size = 0.5, alpha = 0.9, color = 'red') +
-  geom_line(data = covid_by_date, aes(x = date, y = cases/1e5)) +
   ##format x axis (date axis)
   scale_x_date(date_breaks = "1 month",
                  labels = scales::date_format("%b")) +
@@ -239,8 +280,8 @@ ggplot() +
            y = 115, label = "Predicted Deaths", 
            color = "red", size = 3.5, alpha = 0.9) +
   ##add plot labels
-  labs(title = "Actual and Predicted Daily COVID-19 Deaths (2020)",
-       x = "2020", y = "Thousands of Deaths") +
+  labs(title = "Actual and Predicted Cumulative COVID-19 Deaths (2020)",
+       x = "2020", y = "Thousands of Deaths (Daily)") +
   ##format theme
     theme_minimal() +
     theme(legend.position = "none",
@@ -255,20 +296,121 @@ ggplot() +
           panel.border = element_blank(),
           panel.background = element_blank())
 
-
-
-
-
-
 ```
 
 
 
+```{r, results='asis'}
+p_load(stargazer)
+stargazer(mod_final, type = "html",
+          covariate.labels = c("Cases", "Hospitializations", 
+                               "Deaths (14 day lag)",
+                               "Deaths/Cases (14 day lag)"),
+          dep.var.caption = "", keep.stat = c("n","rsq"),
+          dep.var.labels = "Cumulative COVID-19 Deaths")
+
+```
+
+
+# Q3: 14-Day Projection  
+
+My projection suggests that cumulative COVID-19 deaths would level out over those next 2 weeks, increasing by only about 5,000 deaths. This result is believable given the trends in the true data. One benefit of this simple linear regression approach is that the model is not too flexible, which should help prevent against overfitting, but may increase bias. Additionally, linear regression is fairly interpretable. I included the model parameters in the table above to show the relative contribution of each variable to predicted deaths. Including the lag variables was crucial for creating projections that were consistent with the observed trend in the data, especially considering the oddly low hospitalization numbers reported in the last few days of the data. Alternatively, the model is not well equipped to predict seasonal-like trends or shocks in COVID deaths, since it assumes a linear relationship between deaths and predictors.  
+
+
+```{r, dpi=200}
+## Preprocessing ----------------------------------
+##Forecasting dates:
+last_date = max(model_df$date) ##last observed date in the data
+project_dates = as.Date(last_date + c(1:14)) ##add 2 weeks
+
+
+##Forecast predictors to use in projection.
+##(I use a random walk forecast with a drift, from the 'forecast' package)
+case_pred = forecast::rwf(model_df$cases, h = 14, drift = TRUE) %>%
+                data.frame()
+hosp_pred = forecast::rwf(model_df$hosp, h = 14, drift = TRUE) %>%
+                data.frame()
+
+##Combine into a dataframe
+project_df = data.frame(date = project_dates,
+                        cases = case_pred$Point.Forecast,
+                        hosp = hosp_pred$Point.Forecast) %>%
+              mutate(hosp_case_ratio = hosp/cases,
+                      ##center/rescale covariates again
+                      scaled_cases = scale(cases),
+                      scaled_hosp = scale(hosp))
+##Add lagged deaths & lagged cases
+##First filter to dates of the last 14 observations, and extract. Then reverse
+##the order so that the first projected observation is matched with the deaths
+##corresponding to 14 days beforehand.
+##I subtract 0:13 so that the first lagged date is just the last recorded date.
+lagged_deaths = model_df %>% ##filter to last 14 days
+        filter(date %in% as.Date(last_date - c(0:13))) %>% 
+        select(lagged_deaths)
+lagged_cases = model_df %>%
+        filter(date %in% as.Date(last_date - c(0:13))) %>% 
+        select(lagged_cases)
+project_df = cbind(project_df, 
+                   lagged_deaths = rev(lagged_deaths),
+                   lagged_cases = rev(lagged_cases)) %>%
+  mutate(lag_case_death_rat = lagged_deaths/lagged_cases)
+
+##Projection -----------------------------------------
+##Project deaths with our model (and add to df)
+deaths_proj = predict(mod_final, project_df, interval = "confidence")
+project_df = cbind(project_df, deaths_proj)
+
+##Plot ---------------------------------------------
+ggplot() +
+  #actual deaths
+  geom_line(data = model_df, aes(x = date, y = deaths/1e3), 
+            size = 1, alpha = 0.5) +
+  #projected deaths (confidence interval + line)
+  geom_ribbon(data = project_df, aes(x = date, 
+                                     ymin = lwr/1e3, ymax = upr/1e3),
+              fill = 'red', alpha = 0.3) +
+  geom_line(data = project_df,
+            mapping = aes(x = date, y = fit/1e3),
+            size = 0.5, alpha = 0.9, color = 'red') +
+  #modeled deaths
+  geom_line(data = mod_pred, aes(x = date, y = death_hat/1e3),
+            size = 0.5, alpha = 0.3, color = 'red') +
+  ##add line labels
+  annotate("text", x = as.Date("2020-05-01", origin = "2020-05-01"),
+           y = 125, label = "True Deaths", 
+           size = 3, alpha = 0.5) +
+  annotate("text", x = as.Date("2020-05-01", origin = "2020-05-01"),
+           y = 115, label = "Predicted Deaths", 
+           color = "red", size = 3, alpha = 0.5) +
+  annotate("text", x = as.Date("2020-08-01", origin = "2020-05-01"),
+           y = 115, label = "Projected Deaths \n (95% CI)", 
+           color = "red", size = 3.5) +
+  ##add plot labels
+  labs(title = "COVID-19 Cumulative Deaths: 14-Day Projection",
+       x = "2020", y = "Thousands of Deaths") +
+  ##format x axis (date axis)
+  scale_x_date(date_breaks = "1 month",
+                 labels = scales::date_format("%b")) +
+  ##format theme
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = "11", family = "sans"),
+          plot.subtitle = element_text(size="9",family="sans",color="gray45"),
+          axis.title = element_text(size="9",family="sans",color="gray45"),
+          axis.text = element_text(size="9",family="sans",color="gray45"),
+          legend.title = element_text(size="9",family="sans",color="gray45"),
+          legend.text = element_text(size="8",family="sans",color="gray45"),
+          plot.caption = element_text(size="6",family="sans",color="gray45"),
+          panel.grid.major = element_line(color = "gray93"),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+  
+```
 
 
 
-
-
+## Q4: Future Improvement
+While the projections from this model appear somewhat reliable, there is much to be improved upon. Given more time, I would experiment with some classic time series models. For example, an ARIMA model might be a more sophisticated way to predict future deaths using past deaths as a predictor (the "auto-regressive" component) while also incorporating seasonality or some random processes. I would also be interested in the performance of non-parametric methods, like machine learning. While this may be unnecessary and we would probably need more predictors, something like a random forest or boosted ensemble could be implemented quickly and might have decent results.    
 
 
 
