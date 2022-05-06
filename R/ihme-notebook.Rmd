@@ -2,12 +2,13 @@
 title: "IHME Technical Assessment"
 author: "Hans Elliott"
 date: "5/5/2022"
-output: 
-  html_document:
-    theme: readable
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
+##  html_document:
+##    theme: readable
+
 knitr::opts_chunk$set(echo = FALSE,
                       warning = FALSE,
                       message = FALSE)
@@ -45,17 +46,19 @@ skimr::skim(covid) %>% select(skim_variable, n_missing, complete_rate)
 
 
 
-## Q1: Cases, Hospitalizations, & Deaths
+# Q1: Cases, Hospitalizations, & Deaths
 COVID-19 cases, hospitalizations, and deaths share an almost linear relationship. Plot 1 shows the relationship between these indicators grouped by state and totaled over time (2020). The states with the lowest reported cases also had the least deaths and the least hospitalizations. As we move along the x-axis, higher levels of reported cases map to states with higher deaths and hospitalizations. This is logical since states which suffered more severe outbreaks had more COVID cases, yielding more hospitalizations and more deaths.     
 Plot 2 shows the accumulation of cases, deaths, and hospitalizations over time. Although there are significantly more reported cases than deaths or hospitalizations, the three indicators follow very similar time trends, providing further evidence of a linear relationship with each other. However, Plot 2 also reveals that these variables are not linear in time. The first several months of 2020 saw sharp increases in all three variables which began to level out towards the second half of the year.  
 
 
 
 
-#### Plot 1: Relationship by Location
+## Plot 1: Relationship by Location   
+
+
 ```{r, dpi = 200, warning=FALSE,message=FALSE}
 ## Create color palette for plot
-my_palette = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))
+my_palette = colorRampPalette(RColorBrewer::brewer.pal(3, "YlOrRd"))
 
 ##Summarize COVID indicators by location
 covid_by_place = covid %>% na.omit() %>% ##omit observations with missing values
@@ -70,8 +73,19 @@ covid_by_place = covid %>% na.omit() %>% ##omit observations with missing values
 ##Create plot
 covid_by_place %>%  
   ggplot(aes(x = confirmed/1e3, y = deaths/1e3)) +
+    ##Add points, vary color & size by hospitalizations
     geom_point(alpha = 0.7, 
                aes(color = hosp/1e3, size = hosp/1e3)) +
+    geom_point(aes(size = hosp/1e3), ##just adds a light outline to the points
+               shape = 1, colour = "black", alpha = 0.2) +
+    ##Add some state labels
+    ggrepel::geom_text_repel(data = covid_by_place %>% ##filter to extreme
+                                filter(confirmed/1e3 > 4000 |
+                                       confirmed/1e3 < 110),
+                              aes(label = state),
+                              size = 2, box.padding = unit(0, "lines"),
+                              force = 100, alpha = 0.5
+                              ) +
     ##Set color and size scale to combine those legends
     scale_color_gradientn(colors = my_palette(100),
                           limits=c(0, 1000), breaks=seq(0, 1000, by=250)) +
@@ -80,22 +94,16 @@ covid_by_place %>%
     ##Set axis scales
     scale_x_continuous(breaks = seq(0, 6000, by = 1000),limits = c(0, 6000)) +
     scale_y_continuous(breaks = seq(0, 300, by = 50)) +
-    ##Add location labels
-    ggrepel::geom_label_repel(data = covid_by_place %>% ##filter to extreme
-                                filter(confirmed/1e3 > 4000),
-                              aes(label = state),
-                              size = 2, box.padding = unit(0, "lines"),
-                              force = 50, alpha = 0.5
-                              ) +
     ##Add plot labels
     labs(
       title = "COVID-19 by State: Cumulative Cases, Deaths, & Hospitalizations",
-      subtitle = "Indicators totaled across time",
+      subtitle = "Indicators totaled across 2020.",
       x = "Thousands of Reported Cases",
       y = "Thousands of Deaths", 
       color = "Hospitalizations \n (Thousands)",
       size = "Hospitalizations \n (Thousands)",
-      caption = "Sample of locations for which hospitalizations are reported.") +
+      caption = 
+        "Sample of locations for which hospitalizations are reported.") +
     ##create aesthetic theme
     theme_minimal() + 
     theme(legend.position = "right",
@@ -116,7 +124,8 @@ covid_by_place %>%
 ```
 
 
-#### Plot 2: Relationship Over Time
+## Plot 2: Relationship Over Time  
+
 
 ```{r, dpi=200, results='asis'}
 
@@ -175,7 +184,7 @@ covid_by_date %>%
 ```
 
 
-## Q2: Modeling Daily Deaths
+# Q2: Modeling Daily Deaths  
 
 I fit a linear regression to predict daily U.S. COVID-19 deaths from cases and hospitalizations. Before fitting the model, I aggregated the cases, hospitalizations, and deaths by date, providing a total across the U.S. for each day. I then split this dataset into a training and testing (validation) set in order to evaluate different model specifications. I settled on a model which predicts daily deaths given cases, hospitalizations, a 14-day lag variable of deaths, and a death to case ratio which is also lagged by 14 days. This was one of the less flexible specifications that I tried, which will ideally limit overfitting. Ultimately it was the best model in terms of reducing training and validation RMSE and still providing reasonable projections. As seen in the plot below, it is effective at capturing the general trend in COVID-19 deaths over time.  
 ```{r, echo=FALSE, results='hide'}
@@ -302,19 +311,20 @@ ggplot() +
 
 ```{r, results='asis'}
 p_load(stargazer)
-stargazer(mod_final, type = "html",
+stargazer(mod_final, type = "latex",
           covariate.labels = c("Cases", "Hospitializations", 
                                "Deaths (14 day lag)",
                                "Deaths/Cases (14 day lag)"),
           dep.var.caption = "", keep.stat = c("n","rsq"),
-          dep.var.labels = "Cumulative COVID-19 Deaths")
+          dep.var.labels = "Cumulative COVID-19 Deaths",
+          header = FALSE)
 
 ```
 
 
 # Q3: 14-Day Projection  
 
-My projection suggests that cumulative COVID-19 deaths would level out over those next 2 weeks, increasing by only about 5,000 deaths. This result is believable given the trends in the true data. One benefit of this simple linear regression approach is that the model is not too flexible, which should help prevent against overfitting, but may increase bias. Additionally, linear regression is fairly interpretable. I included the model parameters in the table above to show the relative contribution of each variable to predicted deaths. Including the lag variables was crucial for creating projections that were consistent with the observed trend in the data, especially considering the oddly low hospitalization numbers reported in the last few days of the data. Alternatively, the model is not well equipped to predict seasonal-like trends or shocks in COVID deaths, since it assumes a linear relationship between deaths and predictors.  
+My projection suggests that cumulative COVID-19 deaths would level out over those next 2 weeks, increasing by only about 5,000 deaths. This result is believable given the trends in the true data. One benefit of this simple linear regression approach is that the model is not too flexible, which should help prevent against overfitting, but may increase bias. Additionally, linear regression is fairly interpretable. I included the model parameters in the table above to show the relative contribution of each variable to predicted deaths. Including the lag variables was crucial for creating projections that were consistent with the observed trend in the data, especially considering the oddly low hospitalization numbers reported in the last few days of the data. Alternatively, the model is not well equipped to predict seasonal-like trends or shocks in COVID deaths, since it assumes a simple linear relationship between deaths and predictors.  
 
 
 ```{r, dpi=200}
@@ -357,7 +367,8 @@ project_df = cbind(project_df,
 
 ##Projection -----------------------------------------
 ##Project deaths with our model (and add to df)
-deaths_proj = predict(mod_final, project_df, interval = "confidence")
+deaths_proj = predict(mod_final, project_df, 
+                      interval = "confidence", level = 0.95)
 project_df = cbind(project_df, deaths_proj)
 
 ##Plot ---------------------------------------------
@@ -404,13 +415,12 @@ ggplot() +
           panel.grid.major = element_line(color = "gray93"),
           panel.border = element_blank(),
           panel.background = element_blank())
-  
 ```
 
 
 
-## Q4: Future Improvement
-While the projections from this model appear somewhat reliable, there is much to be improved upon. Given more time, I would experiment with some classic time series models. For example, an ARIMA model might be a more sophisticated way to predict future deaths using past deaths as a predictor (the "auto-regressive" component) while also incorporating seasonality or some random processes. I would also be interested in the performance of non-parametric methods, like machine learning. While this may be unnecessary and we would probably need more predictors, something like a random forest or boosted ensemble could be implemented quickly and might have decent results.    
+# Q4: Future Improvement
+While the projections from this model appear somewhat reliable, there is much to be improved upon. Given more time, I would experiment with some classic time series models. For example, an ARIMA model might be a more sophisticated way to predict future deaths using past deaths as a predictor (the "auto-regressive" component) while also incorporating seasonality or some random processes. I would also be interested in the performance of non-parametric methods, like machine learning. While this may be unnecessary and we would probably need more predictors, something like a random forest or boosted tree ensemble could be implemented quickly and might have decent results.    
 
 
 
