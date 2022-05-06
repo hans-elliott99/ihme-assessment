@@ -1,0 +1,274 @@
+---
+title: "IHME Assessment"
+author: "Hans Elliott"
+date: "5/5/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data & Libraries
+
+
+```{r warning=FALSE, message=FALSE}
+# Load libraries
+## Install the 'pacman' package-management package if necessary 
+if (!require("pacman")) install.packages("pacman")
+## Install other packages using pacman::p_load()
+pacman::p_load(here, janitor, skimr, ##for loading/cleaning data
+               ggplot2, RColorBrewer, ggrepel, scales,
+               fixest, ##flexible regression package
+               dplyr, tidyr
+               )
+
+# Load Data
+covid = here("data", "covid_data_cases_deaths_hosp.csv") %>% read.csv()
+dim(covid) ##view data dimensions
+```
+
+# Cleaning & Setup
+
+
+```{r}
+## Convert variable names to common format ("snake_case")
+covid = janitor::clean_names(covid)
+names(covid)
+
+## View # of missing values in each variable
+# (Hospitalization data is available for only some states)
+skimr::skim(covid) %>% select(skim_variable, n_missing, complete_rate)
+
+```
+
+
+# Questions 
+
+## Q1: Cases, Hospitalizations, & Deaths
+COVID-19 cases, hospitalizations, and deaths share an almost linear relationship. Plot 1 shows the relationship between these indicators grouped by state and totaled over time (2020). The states with the lowest reported cases also had the least deaths and the least hospitalizations. As we move along the x-axis, higher levels of reported cases map to states with higher deaths and hospitalizations.  
+This is logical since states which suffered more severe outbreaks had more COVID cases, yielding more hospitalizations and more deaths.   
+Plot 2 shows the accumulation of cases, deaths, and hospitalizations over time. Although there are significantly more reported cases than deaths or hospitalizations, the three indicators follow very similar time trends, providing further evidence of a linear relationship with each other. However, Plot 2 also reveals that these variables are not linear in time. The first several months of 2020 saw sharp increases in all three variables which began to level out towards the second half of the year.  
+
+
+
+
+### Plot 1: Relationship by Location
+```{r, dpi = 200, warning=FALSE,message=FALSE}
+# library(ggplot2)
+# library(RColorBrewer)
+# library(ggrepel)
+## Create color palette for plot
+my_palette = colorRampPalette(RColorBrewer::brewer.pal(9, "YlOrRd"))
+
+##Summarize COVID indicators by location
+covid_by_place = covid %>% na.omit() %>% ##omit observations with missing values
+  ##Summarize by location
+  group_by(location_id) %>%
+  summarise(confirmed = sum(confirmed, na.rm = T),
+            deaths = sum(deaths, na.rm = T),
+            hosp = sum(hospitalizations, na.rm = T),
+            state = province_state,
+            population = population) %>% unique()
+
+##Create plot
+covid_by_place %>%  
+  ggplot(aes(x = confirmed/1e3, y = deaths/1e3)) +
+    geom_point(alpha = 0.7, 
+               aes(color = hosp/1e3, size = hosp/1e3)) +
+    ##Set color and size scale to combine those legends
+    scale_color_gradientn(colors = my_palette(100),
+                          limits=c(0, 1000), breaks=seq(0, 1000, by=250)) +
+    scale_size_continuous(limits=c(0, 1000), breaks=seq(0, 1000, by=250)) +
+    guides(color = guide_legend(), size = guide_legend()) +
+    ##Set axis scales
+    scale_x_continuous(breaks = seq(0, 6000, by = 1000),limits = c(0, 6000)) +
+    scale_y_continuous(breaks = seq(0, 300, by = 50)) +
+    ##Add location labels
+    ggrepel::geom_label_repel(data = covid_by_place %>% ##filter to extreme
+                                filter(confirmed/1e3 > 4000),
+                              aes(label = state),
+                              size = 2, box.padding = unit(0, "lines"),
+                              force = 50, alpha = 0.5
+                              ) +
+    ##Add plot labels
+    labs(
+      title = "COVID-19 by State: Cumulative Cases, Deaths, & Hospitalizations",
+      subtitle = "Indicators totaled across time",
+      x = "Thousands of Reported Cases",
+      y = "Thousands of Deaths", 
+      color = "Hospitalizations \n (Thousands)",
+      size = "Hospitalizations \n (Thousands)",
+      caption = "Sample of locations for which hospitalizations are reported.") +
+    ##create aesthetic theme
+    theme_minimal() + 
+    theme(legend.position = "right",
+          legend.direction = "vertical",
+          plot.title = element_text(size = "11", family = "sans"),
+          plot.subtitle = element_text(size="9",family="sans",color="gray45"),
+          axis.title = element_text(size="9",family="sans",color="gray45"),
+          axis.text = element_text(size="9",family="sans",color="gray45"),
+          legend.title = element_text(size="9",family="sans",color="gray45"),
+          legend.text = element_text(size="8",family="sans",color="gray45"),
+          plot.caption = element_text(size="6",family="sans",color="gray45"),
+          panel.grid.major = element_line(color = "gray93"),
+          panel.border = element_blank(),
+          panel.background = element_blank()
+          #panel.grid.minor = element_line(color = "gray93")
+              )
+
+```
+
+
+### Plot 2: Relationship Over Time
+
+```{r, dpi=200}
+# library(ggplot2)
+# library(RColorBrewer)
+# library(ggrepel)
+
+##Total COVID indicators for each date
+covid_by_date = covid %>%
+  group_by(date) %>%
+  summarise(cases = sum(confirmed, na.rm = T),
+            deaths = sum(deaths, na.rm = T),
+            hosp = sum(hospitalizations, na.rm = T)) %>%
+  ##Convert date from EXCEL's numeric format to date format
+  mutate(date = as.Date(date, origin = "1899-12-30"))
+
+
+##Mutate vars for plotting
+covid_by_date %>%
+  transmute(
+    'Log Cases' = ifelse(cases==0, 0, log(cases)),
+    'Log Deaths' = ifelse(deaths==0, 0, log(deaths)),
+    'Log Hospitalizations' = ifelse(hosp==0, 0, log(hosp)),
+    date = date
+  ) %>%
+  ##Pivot data longer for facet wrapping
+  pivot_longer(cols = !date,
+               names_to = "indicator", 
+               values_to = "count") %>%
+  
+  
+##Create plot  
+  ggplot(aes(x = date, y = count, 
+             color = indicator, fill = indicator)) +
+    geom_line(alpha = 0.7) +
+    geom_area(alpha = 0.5) +
+    facet_wrap(~indicator, scales = "free") +
+    ##format x axis (date axis)
+    scale_x_date(date_breaks = "1 month",
+                 labels = scales::date_format("%b")) +
+    ##add plot labels
+    labs(title = "U.S. 2020 Covid-19 Outbreak Indicators",
+         x = "2020", y = "Cumulative Count (Thousands)",
+         caption = 
+           "Hospitalization data available for a limited number of states.") +
+    ##format theme
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = "11", family = "sans"),
+          plot.subtitle = element_text(size="9",family="sans",color="gray45"),
+          axis.title = element_text(size="9",family="sans",color="gray45"),
+          axis.text = element_text(size="9",family="sans",color="gray45"),
+          legend.title = element_text(size="9",family="sans",color="gray45"),
+          legend.text = element_text(size="8",family="sans",color="gray45"),
+          plot.caption = element_text(size="6",family="sans",color="gray45"),
+          panel.grid.major = element_line(color = "gray93"),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+
+```
+
+
+## Q2: Modeling Daily Deaths
+
+
+```{r}
+## Some data preprocessing
+model_df = covid %>%
+  group_by(date) %>%
+  summarise(cases = sum(confirmed, na.rm = T),
+            deaths = sum(deaths, na.rm = T),
+            hosp = sum(hospitalizations, na.rm = T),
+            death_case_ratio = deaths/cases) %>%
+  ##Convert date from EXCEL's numeric format to date format
+  mutate(date = as.Date(date, origin = "1899-12-30")) %>%
+  ##center/rescale covariates to avoid overflow errors
+  mutate(scaled_cases = scale(cases),
+         scaled_hosp = scale(hosp))
+
+
+mod1 = lm(deaths ~ scaled_cases + scaled_hosp + death_case_ratio +
+                     #sqrt(cases) + sqrt(hosp) + sqrt(cases)*sqrt(hosp) +
+                     I(scaled_cases^2) + I(scaled_hosp^2) +
+                      scaled_cases*scaled_hosp,
+                     data = model_df)
+
+summary(mod1)
+
+print(paste("Model RMSE:",
+            sqrt( mean((model_df$deaths - predict(mod1))^2)  ) %>% round(5)
+))
+
+```
+
+
+```{r}
+##predicted deaths
+pred_deaths = data.frame(date = model_df$date,
+                        death_hat = predict(mod1))
+
+
+##plot
+ggplot() +
+  geom_line(data = covid_by_date, aes(x = date, y = deaths/1e3), 
+            size = 1, alpha = 0.5) +
+  geom_line(data = pred_deaths, aes(x = date, y = death_hat/1e3),
+            size = 0.5, alpha = 0.9, color = 'red') +
+  geom_line(data = covid_by_date, aes(x = date, y = cases/1e5)) +
+  ##format x axis (date axis)
+  scale_x_date(date_breaks = "1 month",
+                 labels = scales::date_format("%b")) +
+  ##add line labels
+  annotate("text", x = as.Date("2020-05-01", origin = "2020-05-01"),
+           y = 125, label = "True Deaths", 
+           size = 3.5, alpha = 0.5) +
+  annotate("text", x = as.Date("2020-05-01", origin = "2020-05-01"),
+           y = 115, label = "Predicted Deaths", 
+           color = "red", size = 3.5, alpha = 0.9) +
+  ##add plot labels
+  labs(title = "Actual and Predicted Daily COVID-19 Deaths (2020)",
+       x = "2020", y = "Thousands of Deaths") +
+  ##format theme
+    theme_minimal() +
+    theme(legend.position = "none",
+          plot.title = element_text(size = "11", family = "sans"),
+          plot.subtitle = element_text(size="9",family="sans",color="gray45"),
+          axis.title = element_text(size="9",family="sans",color="gray45"),
+          axis.text = element_text(size="9",family="sans",color="gray45"),
+          legend.title = element_text(size="9",family="sans",color="gray45"),
+          legend.text = element_text(size="8",family="sans",color="gray45"),
+          plot.caption = element_text(size="6",family="sans",color="gray45"),
+          panel.grid.major = element_line(color = "gray93"),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
