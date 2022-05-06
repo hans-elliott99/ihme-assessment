@@ -422,5 +422,7 @@ ggplot() +
 # Q4: Future Improvement
 While the projections from this model appear somewhat reliable, there is much to be improved upon. Given more time, I would experiment with some classic time series models. For example, an ARIMA model might be a more sophisticated way to predict future deaths using past deaths as a predictor (the "auto-regressive" component) while also incorporating seasonality or some random processes. I would also be interested in the performance of non-parametric methods, like machine learning. While this may be unnecessary and we would probably need more predictors, something like a random forest or boosted tree ensemble could be implemented quickly and might have decent results.    
 
+## Code
+The code used to create this document can be found on [Hans Elliott's GitHub (linked)](https://github.com/hans-elliott99/ihme-assessment).
 
 
